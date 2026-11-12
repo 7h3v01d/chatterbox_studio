@@ -1,0 +1,12 @@
+chatterbox-tts
+torch
+torchaudio
+numpy
+soundfile
+sounddevice
+PyQt6
+fastapi
+uvicorn
+python-multipart
+httpx
+mcp
