@@ -1,9 +1,10 @@
+# Normally you don't need this file: run install.bat (Windows) or  pip install -e .
+# PyTorch: install.bat swaps in the CUDA build automatically when an NVIDIA GPU is found.
 chatterbox-tts
-torch
-torchaudio
 numpy
-soundfile
+soundfile>=0.12
 sounddevice
+librosa
 PyQt6
 fastapi
 uvicorn

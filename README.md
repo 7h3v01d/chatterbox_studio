@@ -1,43 +1,139 @@
 # Chatterbox Studio
 
-Record your voice → clone it with Resemble AI's Chatterbox → play it back → use it from code or LLMs.
+**Clone your voice in about 15 seconds, then use it anywhere**: in a desktop app, from the command line, over HTTP, through any OpenAI-compatible speech client, or from Claude Desktop and other AI tools via MCP.
 
-## Setup (Windows, Python 3.11)
-    python -m venv .venv && .venv\Scripts\activate
-    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121   # GPU build
-    pip install -r requirements.txt
+Built on [Chatterbox](https://github.com/resemble-ai/chatterbox) by Resemble AI. Everything runs on your own computer. Nothing is uploaded.
 
-## Run
-    python -m chatterbox_studio gui      # desktop app (can also host the API)
-    python -m chatterbox_studio serve    # headless API on 127.0.0.1:8765
-    python -m chatterbox_studio mcp      # MCP stdio server (talks to the API above)
+---
 
-## API
-    GET  /health
-    GET  /voices
-    POST /voices          multipart: name, consent=true, file
-    DELETE /voices/{id}
-    PUT  /voices/{id}/settings   {"exaggeration","cfg_weight","temperature","language"}  -> saved as that voice's defaults
-    GET  /languages
-    POST /tts             {"text","voice_id","language"?,"exaggeration"?,"cfg_weight"?,"temperature"?}  -> audio/wav
-    POST /tts/stream      same body -> chunked WAV (plays as sentence-groups finish)
-    POST /v1/audio/speech OpenAI-compatible (voice = voice_id, wav only)
+## Install (Windows)
 
-Env: CBX_DATA, CBX_HOST, CBX_PORT, CBX_TOKEN (Bearer auth), CBX_URL (MCP -> API).
+1. Install **Python 3.11** from python.org. Tick **“Add python.exe to PATH.”**
+2. Double-click **`install.bat`**. It creates a private environment, installs everything, and if you have an NVIDIA graphics card, installs the GPU version of PyTorch automatically. It ends with a health check.
+3. Double-click **`run.bat`**.
 
-## MCP config (Claude Desktop etc.)
-    {"mcpServers": {"chatterbox": {"command": "C:\\path\\.venv\\Scripts\\python.exe",
-                                   "args": ["-m", "chatterbox_studio", "mcp"]}}}
+The first time you press **Speak**, the voice model downloads (a few GB, once).
 
-## Defaults, languages, streaming
-- Unset request options fall back to the voice's saved defaults, then to global defaults.
-- English uses ChatterboxTTS; any other language switches to ChatterboxMultilingualTTS
-  (needs a recent `pip install -U chatterbox-tts`). Only one model is kept in memory, so
-  switching languages reloads. The multilingual model has no built-in voice: pick a cloned one.
-- Streaming is per sentence-group, not per token. If generation is slower than realtime
-  you will hear gaps between chunks; turn streaming off for gap-free playback.
+> Mac / Linux: `python3.11 -m venv .venv && source .venv/bin/activate && pip install -e .` then `python -m chatterbox_studio`.
 
-## Notes
-- Voices require a consent attestation; the API refuses any voice without it.
-- Chatterbox embeds an inaudible Perth watermark in all output.
-- ~10 s of clean, single-speaker audio clones best.
+Something not working? Run `.venv\Scripts\python -m chatterbox_studio doctor` for a plain-English check of Python, GPU, microphone, speakers and ports.
+
+## Using the app
+
+**Make a voice**: click **＋ New voice**, read the short passage aloud, and stop when the bar fills (about 10–15 s). You get an instant quality check (noise, clipping, length) with tips if anything needs fixing. Name it, confirm consent, and save. You can also drag an audio file onto the window.
+
+**Speak**: pick a voice, type, and press **Speak** (or Ctrl+Enter). Choose a **Style**:
+
+| Style | Good for |
+|---|---|
+| Natural | everyday speech (default) |
+| Narrator | steady voice-over and audiobooks |
+| Calm | relaxed, even delivery |
+| Expressive / Dramatic | characters, ads, energy |
+| Other-language voice | when the voice is in a different language from the text (stops accent bleed) |
+
+**Fine-tune** gives you Emotion, Pacing, Variation, Speed, Pause length and a **Seed**. The same seed with the same settings reproduces the same take. **Save as voice default** remembers your settings for that voice, everywhere (app, CLI, API, MCP).
+
+**In your text:**
+- `[pause 1s]`, `[pause 500ms]` or `[pause]` add silence
+- a blank line starts a new paragraph, with a slightly longer pause
+- Markdown is cleaned up automatically (headings, bullets, bold, links)
+- with the **Turbo** model: `[laugh]`, `[chuckle]`, `[cough]`
+
+**Models**
+
+| Model | Use it for |
+|---|---|
+| Auto | picks Standard for English, Multilingual otherwise |
+| Standard | English with the full Emotion/Pacing controls |
+| Turbo | fastest English, with reaction tags |
+| Nano | smallest English model, usable on CPU |
+| Multilingual | 23 languages (needs one of your voices) |
+
+**Long-form**: paste or open a `.txt`/`.md` file (articles, scripts, chapters). It narrates in the background with progress and an ETA, can be cancelled, and can write an **.srt subtitle file** timed to the audio, ready for video editors.
+
+**History**: every take is kept. Play it again, reuse its text and settings, or find the file.
+
+**Connect**: start the local server and copy a ready-made setup for Claude Desktop, Python or curl.
+
+## Command line
+
+```bat
+python -m chatterbox_studio say "Hello there" --voice Leon -o hello.mp3
+python -m chatterbox_studio say --file chapter1.md --preset narrator --srt -o chapter1.mp3
+type notes.txt | python -m chatterbox_studio say - --voice Leon --play
+python -m chatterbox_studio clone my_voice.wav --name Leon --consent
+python -m chatterbox_studio voices
+python -m chatterbox_studio serve --preload
+python -m chatterbox_studio doctor
+```
+
+Voices can be given by **name** or id. Output format follows the file extension (wav, flac, mp3, ogg, opus).
+
+## HTTP API
+
+Start it from the app (**Connect → Start server**) or with `serve.bat`. Interactive docs are at `http://127.0.0.1:8765/docs`.
+
+```
+GET    /health                         status (no auth)
+GET    /voices   /presets  /models  /languages
+POST   /voices                         multipart: name, consent=true, file
+GET    /voices/{id}   PATCH /voices/{id} {"name"}   DELETE /voices/{id}
+GET    /voices/{id}/audio              reference clip
+PUT    /voices/{id}/settings           save per-voice defaults
+POST   /tts                            {"text","voice_id","preset","model","language","speed","seed","format",...}
+POST   /tts/stream                     chunked WAV that starts playing straight away
+POST   /jobs                           long-form in the background {"text",...,"format","srt":true}
+GET    /jobs  /jobs/{id}  /jobs/{id}/audio  /jobs/{id}/srt     DELETE /jobs/{id} cancels
+POST   /v1/audio/speech                OpenAI-compatible     GET /v1/models
+```
+
+Unset options fall back to the voice's saved defaults, then to global defaults. `/tts` accepts up to 20,000 characters (`CBX_MAX_CHARS`); use `/jobs` for anything longer (up to 500,000).
+
+**OpenAI-compatible**: point any OpenAI client at `http://127.0.0.1:8765/v1`. `voice` takes your voice's name or id. Stock names such as `alloy` or `nova` fall back to the built-in voice, so existing apps work unchanged. Supports `mp3` (default), `opus`, `flac`, `wav`, `pcm`, and `speed`.
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="not-needed")
+with client.audio.speech.with_streaming_response.create(
+        model="chatterbox", voice="Leon", input="Hello from my own voice!") as r:
+    r.stream_to_file("hello.mp3")
+```
+
+## MCP (Claude Desktop and other AI tools)
+
+In the app: **Connect → Claude Desktop (MCP) config** copies the exact config for your machine. Paste it into `claude_desktop_config.json` and restart Claude Desktop. The server must be running.
+
+Tools: `status`, `list_voices`, `list_presets`, `speak` (switches to a background job automatically for long text), `speak_long` (audio + subtitles), `set_voice_defaults`, `clone_voice` (consent required). Deleting voices is deliberately **not** exposed to AI tools.
+
+## Settings (environment variables)
+
+| Variable | Default | |
+|---|---|---|
+| `CBX_DATA` | `%USERPROFILE%\.chatterbox_studio` | voices, output, jobs |
+| `CBX_HOST` / `CBX_PORT` | `127.0.0.1` / `8765` | API address |
+| `CBX_TOKEN` | – | require `Authorization: Bearer <token>` |
+| `CBX_URL` | `http://HOST:PORT` | where the MCP server finds the API |
+| `CBX_MAX_CHARS` | `20000` | per `/tts` request |
+| `CBX_ALLOW_INSECURE` | – | `1` allows a network bind without a token (not recommended) |
+
+## Safety and privacy
+
+- **Consent is required** for every voice. Only clone your own voice, or one you have explicit permission to use.
+- The API listens on **this computer only** by default. It **refuses to listen on your network without a token**.
+- Chatterbox embeds an inaudible **PerTh watermark** in all generated audio.
+- Resemble AI marked Chatterbox as retired research in August 2026. The model is still MIT-licensed and works, but expect no upstream fixes.
+
+## Development
+
+```bat
+test.bat            REM or: python -m pytest -q
+```
+
+The suite uses a fake model, so it runs in seconds without a GPU or a model download.
+
+Layout: `src/chatterbox_studio/` contains `text.py` (planning and chunking), `audio.py` (encode, trim, speed, quality, subtitles), `engine.py` (models), `voices.py`, `jobs.py`, `api.py`, `mcp_server.py`, `cli.py`, `gui.py` and `recorder.py`.
+
+---
+
+Apache-2.0 © 2026 Leon Priest ([7h3v01d](https://github.com/7h3v01d))
