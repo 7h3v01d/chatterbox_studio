@@ -1,0 +1,11 @@
+workspace/
+.venv/
+__pycache__/
+.old/
+*.egg-info/
+.pytest_cache/
+config.json
+seeds.json
+*.zip
+*.rar
+*.url

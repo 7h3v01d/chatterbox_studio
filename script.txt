@@ -1,18 +1,18 @@
 Sample Voice Script:
 
-"Wait—did you actually hear that? Yesterday at 4:15 PM, three brisk winds 
+	"Wait—did you actually hear that? Yesterday at 4:15 PM, three brisk winds 
 
-swept through the quiet valley, carrying the faint, crisp scent of pine and 
+	swept through the quiet valley, carrying the faint, crisp scent of pine and 
 
-rain. While sixty-seven curious onlookers gathered near the old lighthouse, 
+	rain. While sixty-seven curious onlookers gathered near the old lighthouse, 
 
-Dr. Vance calmly checked his silver stopwatch and whispered, 'Time doesn't 
+	Dr. Vance calmly checked his silver stopwatch and whispered, 'Time doesn't 
 
-wait for hesitation, does it?' Suddenly, a bright flare shot into the twilight sky, 
+	wait for hesitation, does it?' Suddenly, a bright flare shot into the twilight sky, 
 
-sparking a chorus of gasps, laughter, and astonished applause across the 
+	sparking a chorus of gasps, laughter, and astonished applause across the 
 
-entire harbor."
+	entire harbor."
 
 
 Notes: 
