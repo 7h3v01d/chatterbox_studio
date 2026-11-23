@@ -33,6 +33,8 @@ Record: date · Windows version · Python · torch + CUDA · GPU · chatterbox-t
 - [ ] MCP: ask it to save to `C:\Windows\test.wav` → refused with a clear message
 - [ ] Browser: open any website's dev console and run
       `fetch("http://127.0.0.1:8765/voices")` → blocked (403 / CORS error)
+- [ ] Same, but from a page served on another local port (e.g. `python -m http.server 9999`) → blocked
+- [ ] Generate two takes of the same text within a second → both appear in History (Windows rename path)
 - [ ] "My home network" without a token → refused; with a token → reachable from another PC
 
 ## 4. Freeze

@@ -46,15 +46,16 @@ def _hostname(value: str) -> str:
     return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
 
 
-def origin_allowed(origin: str, extra: set) -> bool:
+def origin_allowed(origin: str, host_header: str, extra: set) -> bool:
+    """Exact-origin policy (CBX-10): a browser request is allowed only from this API's own
+    origin (its /docs page), i.e. http://<the Host it was addressed to>, or from an origin
+    listed exactly in CBX_ALLOWED_ORIGINS. Other ports and schemes on localhost are other
+    sites and are refused; so is the opaque origin "null"."""
+    origin = (origin or "").strip().lower().rstrip("/")
     if origin in extra:
         return True
-    from urllib.parse import urlsplit
-    try:
-        host = urlsplit(origin).hostname or ""
-    except ValueError:
-        return False
-    return host in LOOPBACK_HOSTS or f"[{host}]" in LOOPBACK_HOSTS
+    host = (host_header or "").strip().lower()
+    return bool(host) and origin == f"http://{host}"
 
 
 def check_bind(host: str, token: str, allow_insecure: bool = False):
@@ -147,16 +148,18 @@ def create_app(engine: TTSEngine, store: VoiceStore,
     async def browser_guard(request, call_next):
         """Block web pages from driving the API (CBX-06).
 
-        * Any request with an Origin header must come from a loopback page (or one listed
-          in CBX_ALLOWED_ORIGINS). Browsers always send Origin on cross-site POSTs, while
+        * Any request with an Origin header must come from this API's own origin (or one
+          listed exactly in CBX_ALLOWED_ORIGINS). Browsers always send Origin on cross-site POSTs, while
           scripts, curl, the OpenAI SDK and the MCP server send none. This stops a web page
           planting a voice with a plain HTML form (no CORS preflight needed).
         * Without a token, the Host header must be loopback. A DNS-rebinding page arrives
           as Host: attacker.example, so it is rejected even though the socket is local.
         """
         origin = request.headers.get("origin")
-        extra = {o.strip() for o in config.ALLOWED_ORIGINS.split(",") if o.strip()}
-        if origin is not None and not origin_allowed(origin, extra):
+        extra = {o.strip().lower().rstrip("/") for o in config.ALLOWED_ORIGINS.split(",")
+                 if o.strip()}
+        if origin is not None and not origin_allowed(origin, request.headers.get("host", ""),
+                                                     extra):
             return JSONResponse({"detail": "Cross-origin browser requests are not allowed."},
                                 status_code=403)
         if not config.API_TOKEN and not config.ALLOW_INSECURE and _hostname(request.headers.get("host", "")) not in LOOPBACK_HOSTS:

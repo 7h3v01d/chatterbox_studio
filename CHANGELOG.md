@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.2 — 2026-11-23 · re-review correction release
+
+Fixes from the re-review of 0.5.1. Each finding was reproduced first: the new tests in
+`tests/test_review_052.py` fail on 0.5.1 (12 fail, 4 controls pass) and all pass on 0.5.2.
+
+- **CBX-07 (high) — "never overwrite" wasn't atomic.** The existence check and
+  `os.replace` were separate steps, so a file created in between was replaced. New files
+  are now published in one no-replace step: `os.rename` on Windows (never replaces),
+  `os.link` on POSIX, and exclusive create on filesystems without hard links.
+  Interleaved-writer test included.
+- **CBX-08 — a take's files weren't committed as a unit.** If the subtitles or sidecar
+  failed, the audio stayed behind. `save_result` is now all-or-nothing: everything is
+  encoded first, replaced files are moved aside, and on failure the files this call created
+  are removed and the originals restored. Pre-existing files are never deleted. MCP
+  `speak_long` does the same for its audio + subtitle pair.
+- **CBX-09 — long MCP requests lost settings.** Over 2,000 characters, `speak()`
+  dropped `exaggeration` and `cfg_weight` when handing off to a job. Both tools now build
+  options in one shared function, and `temperature` is accepted by both. A test compares
+  the short and long requests field by field.
+- **CBX-10 — origin check trusted all of localhost.** `http://localhost:9999` (any local
+  app) was accepted. Browser requests are now allowed only from the API's own exact origin
+  (its `/docs` page) or origins listed exactly in `CBX_ALLOWED_ORIGINS`. Other ports,
+  `https`, other loopback names and `null` are refused.
+- **MCP write race (from the re-review's note).** Validation and file creation are separate
+  steps; reproduced that swapping an output sub-folder for a symlink in between redirected
+  the write outside. The MCP writer now re-checks where the file actually landed right
+  after the exclusive create, before writing data, and removes it if it escaped.
+  (A symlink planted at the file name itself was already refused by the exclusive create;
+  now tested.)
+- Two 0.5.1 tests were updated for changed mechanisms (publish now uses link/rename; exact
+  origins). Their intent is unchanged, and they still pass against 0.5.1.
+
+Known limitations (accepted, documented):
+- The no-hard-link fallback never replaces a file, but a reader could briefly see a file
+  that is still being filled.
+- Restoring originals after a failed overwrite relies on `os.replace` succeeding; if the
+  disk fails mid-rollback, the original stays as a hidden `.bak` file beside it.
+- The Windows `os.rename` publish path is exercised only on Windows (release checklist).
+
 ## 0.5.1 — 2026-11-23 · review correction release
 
 Fixes from the external adversarial review of 0.5.0. Every finding was reproduced against

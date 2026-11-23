@@ -81,9 +81,18 @@ def _safe_dest(save_to: str | None, fmt: str, default: str) -> Path:
 
 
 def _write_new(path: Path, data: bytes):
-    """Exclusive create: fails rather than following a symlink or replacing a file."""
+    """Exclusive create (never follows a symlink at the final name, never replaces a
+    file), then re-check where the file actually landed before writing any data.
+    Validation and creation are separate steps, so a folder swapped for a symlink in
+    between would otherwise redirect the write; the empty file is removed instead."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "xb") as f:
+        landed = Path(os.path.realpath(path))
+        if not any(landed.is_relative_to(r) for r in _output_roots()):
+            f.close()
+            os.unlink(path)
+            raise RuntimeError(f"Refusing to write {path}: it now resolves outside the "
+                               "allowed folders (a folder was swapped for a link).")
         f.write(data)
 
 
@@ -114,31 +123,46 @@ def list_presets() -> dict:
     return {k: v["label"] for k, v in _call("GET", "/presets").json().items()}
 
 
+SYNTH_KEYS = ("language", "preset", "model", "speed", "exaggeration", "cfg_weight",
+              "temperature")
+
+
+def _synth_opts(voice: str, **settings) -> dict:
+    """The one place MCP turns tool arguments into API options, so short and long
+    requests can't drift apart (CBX-09)."""
+    unknown = set(settings) - set(SYNTH_KEYS)
+    if unknown:
+        raise TypeError(f"unknown synthesis options: {sorted(unknown)}")
+    return _clean({"voice_id": voice, **settings})
+
+
 @mcp.tool()
 def speak(text: str, voice: str = "", language: str | None = None,
           preset: str | None = None, model: str | None = None,
           speed: float | None = None, exaggeration: float | None = None,
-          cfg_weight: float | None = None, format: str = "wav",
-          play: bool = False, save_to: str | None = None) -> str:
+          cfg_weight: float | None = None, temperature: float | None = None,
+          format: str = "wav", play: bool = False, save_to: str | None = None) -> str:
     """Turn `text` into speech and return the saved audio file's path.
 
     voice: a voice id or name from list_voices ("" = the built-in voice).
-    language: code like en, fr, de, ja, zh (non-English needs a cloned voice).
+    language: code like en, fr, de, ja, zh (non-English works best with a cloned voice).
     preset: natural | narrator | calm | expressive | dramatic | accent.
     model: auto | standard | turbo | nano | multilingual. Turbo is fastest and understands
            [laugh], [chuckle] and [cough] tags in the text.
-    speed: 0.5-2.0. Text may include [pause 1s] markers; blank lines become paragraph pauses.
+    speed: 0.5-2.0. exaggeration (emotion), cfg_weight (pacing), temperature (variation)
+           override the preset. Text may include [pause 1s] markers.
     format: wav | flac | mp3 | ogg | opus.  play: also play it out loud on this machine.
     save_to: optional file name; it is saved in Chatterbox Studio's output folder (or a
              folder the user allowed) and never overwrites an existing file.
-    Long texts (over ~2000 characters) are handled as a background job automatically.
+    Long texts (over ~2000 characters) run as a background job with the same settings.
     """
-    opts = _clean({"voice_id": voice, "language": language, "preset": preset, "model": model,
-                   "speed": speed, "exaggeration": exaggeration, "cfg_weight": cfg_weight})
+    settings = dict(language=language, preset=preset, model=model, speed=speed,
+                    exaggeration=exaggeration, cfg_weight=cfg_weight, temperature=temperature)
     fmt = format.lower()
     if len(text) > 2000:
-        return speak_long(text, voice, language, preset, model, speed, fmt, False, save_to,
-                          play=play)
+        return speak_long(text, voice, format=fmt, subtitles=False, save_to=save_to,
+                          play=play, **settings)
+    opts = _synth_opts(voice, **settings)
     out = _safe_dest(save_to, fmt, f"mcp_{int(time.time() * 1000)}_{os.urandom(3).hex()}.{fmt}")
     r = _call("POST", "/tts", json={"text": text, "format": fmt, **opts})
     _write_new(out, r.content)
@@ -150,27 +174,36 @@ def speak(text: str, voice: str = "", language: str | None = None,
 @mcp.tool()
 def speak_long(text: str, voice: str = "", language: str | None = None,
                preset: str | None = "narrator", model: str | None = None,
-               speed: float | None = None, format: str = "mp3", subtitles: bool = True,
+               speed: float | None = None, exaggeration: float | None = None,
+               cfg_weight: float | None = None, temperature: float | None = None,
+               format: str = "mp3", subtitles: bool = True,
                save_to: str | None = None, play: bool = False) -> str:
     """Narrate long text (articles, scripts, chapters) as a background job and wait for
     it. Writes an audio file and, with subtitles=True, a matching .srt file. Returns the
-    paths. Markdown is cleaned automatically."""
+    paths. Markdown is cleaned automatically. Settings work as in speak()."""
     fmt = format.lower()
     _safe_dest(save_to, fmt, "probe")                 # validate before queueing any work
-    body = _clean({"text": text, "voice_id": voice, "language": language, "preset": preset,
-                   "model": model, "speed": speed, "format": format.lower(), "srt": subtitles})
-    job = _call("POST", "/jobs", json=body).json()
+    opts = _synth_opts(voice, language=language, preset=preset, model=model, speed=speed,
+                       exaggeration=exaggeration, cfg_weight=cfg_weight,
+                       temperature=temperature)
+    job = _call("POST", "/jobs", json={"text": text, "format": fmt, "srt": subtitles, **opts}).json()
     while job["status"] not in ("done", "failed", "cancelled"):
         time.sleep(1.0)
         job = _call("GET", f"/jobs/{job['id']}", timeout=30).json()
     if job["status"] != "done":
         raise RuntimeError(f"Job {job['status']}: {job.get('error', '')}")
     out = _safe_dest(save_to, fmt, f"mcp_{job['id']}.{fmt}")
-    _write_new(out, _call("GET", f"/jobs/{job['id']}/audio").content)
+    audio_bytes = _call("GET", f"/jobs/{job['id']}/audio").content
+    srt_bytes = _call("GET", f"/jobs/{job['id']}/srt").text.encode("utf-8") if subtitles else None
+    _write_new(out, audio_bytes)
     result = [f"audio: {out} ({job['seconds']} s)"]
-    if subtitles:
+    if srt_bytes is not None:
         sp = out.with_suffix(".srt")
-        _write_new(sp, _call("GET", f"/jobs/{job['id']}/srt").text.encode("utf-8"))
+        try:
+            _write_new(sp, srt_bytes)
+        except BaseException:
+            out.unlink(missing_ok=True)               # all or nothing: drop our audio too
+            raise
         result.append(f"subtitles: {sp}")
     if play:
         _play(str(out))

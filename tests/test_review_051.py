@@ -183,7 +183,7 @@ class TestCommit:
 
         def boom(src, dst):
             raise OSError("disk full")
-        monkeypatch.setattr(os, "replace", boom)
+        monkeypatch.setattr(os, "fsync", lambda fd: boom(fd, None))   # every write path syncs
         with pytest.raises(OSError):
             save_result(res, "wav", tmp_path / "out.wav")
         assert list(tmp_path.iterdir()) == []
@@ -218,7 +218,7 @@ class TestBrowserGuard:
     def test_legit_clients_still_work(self, app, monkeypatch):
         c = TestClient(app, base_url="http://localhost:8765")
         assert c.get("/voices").status_code == 200                        # scripts: no Origin
-        assert c.get("/voices", headers={"Origin": "http://127.0.0.1:8765"}).status_code == 200  # /docs
+        assert c.get("/voices", headers={"Origin": "http://localhost:8765"}).status_code == 200  # /docs
         monkeypatch.setattr(config, "ALLOWED_ORIGINS", "https://my.app", raising=False)
         assert c.get("/voices", headers={"Origin": "https://my.app"}).status_code == 200
 

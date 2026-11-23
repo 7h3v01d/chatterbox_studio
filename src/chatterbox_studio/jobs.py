@@ -12,8 +12,8 @@ Governance (0.5.1):
     rendering. Once synthesis finishes, the job atomically moves to "committing" under its
     lock; a cancel that arrives after that point is a no-op and the job completes. A cancel
     that wins the race means nothing is written.
-  * Files are written to a temporary name and published with os.replace, audio and
-    subtitles first and the history sidecar last, so history never lists half-written takes.
+  * A take's files (audio, subtitles, sidecar) commit together or not at all, and
+    generated files are published with an atomic no-replace step (see save_result).
   * Default output names carry a random suffix, so takes never overwrite each other.
   * Job text is released from memory once the job ends (the sidecar keeps it on disk).
 """
@@ -51,18 +51,51 @@ def default_name(text: str, fmt: str) -> str:
     return f"{time.strftime('%Y%m%d-%H%M%S')}_{_stem(text)}_{uuid.uuid4().hex[:8]}.{fmt}"
 
 
+def _publish_new(tmp: Path, path: Path):
+    """Atomically publish tmp as path, failing (FileExistsError) if path exists.
+
+    The check and the publish are one filesystem operation, so a file another process
+    creates at any moment is never replaced (CBX-07):
+      * Windows: os.rename never replaces an existing file (MoveFileEx without
+        REPLACE_EXISTING) and is atomic on the same volume.
+      * POSIX: os.link fails if the name exists; the temp name is removed afterwards.
+      * Filesystems without hard links (FAT, some network shares): exclusive create
+        (O_CREAT|O_EXCL) and copy. Still never replaces, though a reader could briefly
+        see the file while it is being filled.
+    """
+    if os.name == "nt":
+        os.rename(tmp, path)
+        return
+    try:
+        os.link(tmp, path)
+    except FileExistsError:
+        raise
+    except OSError:
+        with open(path, "xb") as f:
+            f.write(tmp.read_bytes())
+            f.flush()
+            os.fsync(f.fileno())
+    tmp.unlink()
+
+
 def atomic_write(path: Path, data: bytes, overwrite: bool = True):
-    """Write to a temp file in the same folder, then publish with os.replace."""
+    """Write to a temp file in the same folder, then publish it in one step.
+    overwrite=True replaces atomically (os.replace); overwrite=False never replaces
+    anything, even a file that appears after this call starts."""
     path = Path(path)
-    if not overwrite and (path.exists() or path.is_symlink()):
-        raise FileExistsError(f"{path} already exists; not overwriting.")
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.part")
     try:
         with open(tmp, "xb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        if overwrite:
+            os.replace(tmp, path)
+        else:
+            _publish_new(tmp, path)
+    except FileExistsError:
+        tmp.unlink(missing_ok=True)
+        raise FileExistsError(f"{path} already exists; not overwriting.") from None
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -72,10 +105,17 @@ def save_result(result: Result, fmt: str = "wav", dest: Optional[Path] = None, *
                 text: str = "", voice: str = "", settings: Optional[dict] = None,
                 srt: bool = False, out_dir: Optional[Path] = None,
                 overwrite: Optional[bool] = None) -> dict:
-    """Write audio (+ optional .srt) and a .json sidecar. Returns the paths written.
+    """Write audio (+ optional .srt) and a .json sidecar as one unit. Returns the paths.
 
     Overwrite policy: an explicit `dest` overwrites by default (the user chose that
-    path); generated names never overwrite."""
+    path); generated names never overwrite.
+
+    All-or-nothing (CBX-08): everything is encoded before the disk is touched. Files the
+    call replaces are first moved aside, and new files are published with no-replace. If
+    any step fails, the files this call created are removed and the moved-aside originals
+    are put back, so a failure leaves the folder exactly as it was. The sidecar is written
+    last, so history never shows a take whose files aren't all there.
+    """
     out_dir = Path(out_dir or config.OUT_DIR)
     if dest is None:
         dest = out_dir / default_name(text, fmt)
@@ -83,17 +123,38 @@ def save_result(result: Result, fmt: str = "wav", dest: Optional[Path] = None, *
     overwrite = True if overwrite is None else overwrite
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    data = audio.encode(result.audio, result.sr, fmt)          # encode before touching disk
+
     paths = {"audio": str(dest)}
-    atomic_write(dest, data, overwrite)
+    plan = [(dest, audio.encode(result.audio, result.sr, fmt))]
     if srt:
         sp = dest.with_suffix(".srt")
-        atomic_write(sp, audio.srt(result.cues).encode("utf-8"), overwrite)
+        plan.append((sp, audio.srt(result.cues).encode("utf-8")))
         paths["srt"] = str(sp)
     side = dest.with_suffix(dest.suffix + ".json")
     meta = {"created": time.time(), "text": text, "voice": voice, "settings": settings or {},
             "seconds": round(result.seconds, 2), "format": fmt, **paths}
-    atomic_write(side, json.dumps(meta, indent=2).encode("utf-8"), True)   # commit marker
+    plan.append((side, json.dumps(meta, indent=2).encode("utf-8")))
+
+    created: list[Path] = []                 # files this call owns
+    moved: list[tuple[Path, Path]] = []      # (backup, original) for files it replaces
+    try:
+        for path, data in plan:
+            if path.exists() or path.is_symlink():
+                if not overwrite:
+                    raise FileExistsError(f"{path} already exists; not overwriting.")
+                bak = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.bak")
+                os.replace(path, bak)
+                moved.append((bak, path))
+            atomic_write(path, data, overwrite=False)
+            created.append(path)
+    except BaseException:
+        for p in reversed(created):
+            p.unlink(missing_ok=True)
+        for bak, original in reversed(moved):
+            os.replace(bak, original)
+        raise
+    for bak, _ in moved:
+        bak.unlink(missing_ok=True)
     paths["meta"] = str(side)
     return paths
 

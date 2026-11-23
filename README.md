@@ -125,7 +125,8 @@ Audio from MCP is saved in Chatterbox Studio's `output` folder. An AI tool can p
 
 - **Consent is required** for every voice. Only clone your own voice, or one you have explicit permission to use.
 - The API listens on **this computer only** by default. It **refuses to listen on your network without a token**.
-- **Web pages can't use it.** Browser requests from other sites are rejected (an `Origin` check), and without a token only `localhost`/`127.0.0.1` host names are accepted, which blocks DNS-rebinding tricks. Scripts, curl, the OpenAI SDK and MCP are unaffected.
+- **Web pages can't use it.** Browser requests are accepted only from the API's own page (`/docs`) or origins you list in `CBX_ALLOWED_ORIGINS`; everything else, including other apps on localhost, is rejected, and without a token only `localhost`/`127.0.0.1` host names are accepted, which blocks DNS-rebinding tricks. Scripts, curl, the OpenAI SDK and MCP are unaffected.
+- **Takes are never overwritten**, and a take's audio, subtitles and history entry are saved together or not at all.
 - **Bounded work.** At most 20 long-form jobs (2 million characters) can wait at once; beyond that the API answers `429 Too Many Requests`.
 - Chatterbox embeds an inaudible **PerTh watermark** in all generated audio.
 - Resemble AI marked Chatterbox as retired research in August 2026. The model is still MIT-licensed and works, but expect no upstream fixes.
