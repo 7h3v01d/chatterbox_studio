@@ -163,11 +163,15 @@ def cmd_doctor(a):
             ok &= _check(label, True, getattr(m, "__version__", "installed"))
         except Exception as e:
             ok &= _check(label, False, f"{type(e).__name__}: {e}")
-    try:
-        from chatterbox import tts_turbo  # noqa: F401
-        _check("Turbo / Nano models", True, "available")
-    except Exception:
-        _check("Turbo / Nano models", None, "not in this chatterbox-tts (pip install -U chatterbox-tts)")
+    from .engine import capabilities
+    caps = capabilities()
+    if caps["standard"]:
+        _check("Turbo model", caps["turbo"] or None,
+               "available" if caps["turbo"] else "needs a newer chatterbox-tts")
+        _check("Nano model", caps["nano"] or None, "available" if caps["nano"]
+               else "not in the PyPI release; install chatterbox from GitHub to use it")
+        _check("Multilingual", caps["multilingual"] or None,
+               "V3" if caps["multilingual_v3"] else ("V2" if caps["multilingual"] else "missing"))
     try:
         import sounddevice as sd
         inp = sd.query_devices(kind="input")

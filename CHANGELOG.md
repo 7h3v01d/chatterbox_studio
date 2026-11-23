@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.5.1 — 2026-11-23 · review correction release
+
+Fixes from the external adversarial review of 0.5.0. Every finding was reproduced against
+the 0.5.0 code before fixing, and every fix has a regression test that fails on 0.5.0
+(`tests/test_review_051.py`: 16 fail on 0.5.0, 5 controls pass on both, all 21 pass on 0.5.1).
+
+### Security
+- **CBX-01 (high) — MCP could write anywhere.** `speak`/`speak_long` accepted any `save_to`
+  path and overwrote existing files. MCP output is now confined to the output folder, plus
+  folders the user lists in `CBX_MCP_OUTPUT_DIRS`. Paths are resolved through symlinks before
+  the check, existing files are never overwritten (exclusive create), and the extension must
+  match the audio format. Bad paths are refused *before* any synthesis.
+- **CBX-06 (high, new) — web pages could drive the API.** The review raised browser-origin
+  and DNS-rebinding risk as untested. Verification showed it was real: with no token (the
+  default), any web page could plant a voice via a plain HTML form POST, and a DNS-rebinding
+  page could list and delete voices. Now browser requests from non-loopback origins get 403
+  (`CBX_ALLOWED_ORIGINS` to opt in), and without a token only loopback `Host` headers are
+  accepted. Scripts, curl, the OpenAI SDK and MCP send no `Origin` and are unaffected.
+- **CBX-02 (high) — unbounded job queue.** Reproduced: 150 jobs (15 M characters) admitted.
+  Admission is now capped at 20 pending jobs and 2 M pending characters. `POST /jobs`
+  returns 429 with `Retry-After`; the app and MCP show the message. Finished jobs release
+  their text from memory (the history sidecar keeps it on disk).
+
+### Correctness
+- **CBX-04 — cancel vs. finalise race.** Reproduced: a cancel arriving after the last chunk
+  still produced a "done" job with files. There is now a defined commit boundary: a cancel
+  before it writes nothing; after it, cancel is a no-op. All outputs are written to a temp
+  file and published with `os.replace`, sidecar last, so history never lists partial takes.
+- **CBX-05 — takes could overwrite each other.** Reproduced: same leading words within one
+  second gave the same filename. Generated names now carry a random suffix and never
+  overwrite. Explicit destinations (`-o`, Save as…) still overwrite, as the user chose them.
+- **Turbo log spam (new).** Found reading chatterbox-tts 0.1.7: Turbo's `generate()` accepts
+  `exaggeration`/`cfg_weight` but ignores them and logs a warning on every chunk when they
+  are > 0. They are now sent as 0 for Turbo/Nano.
+- **Nano error was wrong (new).** chatterbox-tts 0.1.7 (latest on PyPI) has no Nano model.
+  0.5.0 told users to "upgrade", which can't help. It now detects support by signature and
+  explains the GitHub install. `doctor` reports Turbo/Nano/Multilingual V2-vs-V3 accurately.
+- Multilingual V3 is now chosen by signature, not by catching `TypeError`, which could mask
+  real errors and load twice.
+
+### Not changed, with reasons
+- **CBX-03 — conditioning cache ignores exaggeration: not a defect.** Checked against the
+  chatterbox-tts 0.1.7 source: Standard and Multilingual `generate()` rebuild the emotion
+  conditioning whenever the `exaggeration` they are given differs, and Turbo disables it.
+  The cache only skips re-running the speaker encoder. A test pins the invariant this
+  relies on (exaggeration reaches every `generate()` call), and a real-model listening
+  check is on the release checklist.
+- **59 vs 69 tests.** Not missing tests: without PyQt6 and the MCP SDK, the GUI (8) and MCP
+  (2) modules skip as a whole (59 + 2 skips). To stop that looking green, `test.bat` now
+  sets `CBX_STRICT=1`, which fails the run if anything is skipped.
+
+### Docs
+- Seed reproducibility qualified (same machine and versions; not guaranteed bit-identical).
+- Nano availability, Multilingual V2/V3 and its built-in voice described accurately.
+- New `RELEASE_CHECKLIST.md`: Windows / real-model / MCP / browser smoke checks.
+
 ## 0.5.0 — 2026-11-23
 
 ### Fixed

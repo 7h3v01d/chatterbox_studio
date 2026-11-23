@@ -143,7 +143,6 @@ class TestEngine:
     def test_turbo_gets_only_supported_kwargs(self, engine, factory):
         engine.synthesize("Hello [laugh] there.", None, {"model": "turbo"})
         call = factory.made[0].calls[0]
-        assert call["cfg_weight"] == 0.5          # fake default: we didn't pass it
         assert "language_id" not in call
 
     def test_voice_cache_and_model_switch(self, engine, factory, voice):

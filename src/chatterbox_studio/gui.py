@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboB
 
 from . import __version__, audio, config, text as textmod
 from .engine import Cancelled, Result, TTSEngine
-from .jobs import JobManager, history, save_result
+from .jobs import JobManager, QueueFull, history, save_result
 from .recorder import Recorder, RecorderError, list_inputs
 from .voices import VoiceError, VoiceStore, effective_settings
 
@@ -928,9 +928,12 @@ class MainWindow(QMainWindow, Threads):
         vid = self.long_voice.currentData()
         voice = self.store.get(vid) if vid else None
         st = effective_settings(voice, self.current_settings())
-        job = self.jobs.submit(text, vid or "", voice.path if voice else None, st,
-                               self.long_fmt.currentData(), self.long_srt.isChecked(),
-                               self.seed.value() or None)
+        try:
+            job = self.jobs.submit(text, vid or "", voice.path if voice else None, st,
+                                   self.long_fmt.currentData(), self.long_srt.isChecked(),
+                                   self.seed.value() or None)
+        except (QueueFull, ValueError) as e:
+            return self._msg(str(e), error=True)
         self.job_id = job.id
         self._job_t0 = time.time()
         self.btn_long.setEnabled(False)
@@ -991,10 +994,7 @@ class MainWindow(QMainWindow, Threads):
         return p
 
     def _refresh_history(self):
-        self._hist_items = history() + [
-            {"created": j.finished, "text": j.text, "voice": j.voice_id, "seconds": j.seconds,
-             **j.paths} for j in self.jobs.list() if j.status == "done"]
-        self._hist_items.sort(key=lambda d: d.get("created") or 0, reverse=True)
+        self._hist_items = history(config.OUT_DIR, self.jobs.out_dir)
         names = {v.id: v.name for v in self.store.list()}
         self.hist.setRowCount(len(self._hist_items))
         for r, d in enumerate(self._hist_items):

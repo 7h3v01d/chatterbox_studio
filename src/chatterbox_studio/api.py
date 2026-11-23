@@ -22,16 +22,39 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Response,
+                               StreamingResponse)
 from pydantic import BaseModel, Field
 
 from . import __version__, audio, config
 from .engine import EngineError, TTSEngine, resolve_kind
-from .jobs import JobManager
+from .jobs import JobManager, QueueFull
 from .voices import VoiceError, VoiceNotFound, VoiceStore, effective_settings
 
 OPENAI_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova",
                  "sage", "shimmer", "verse"}
+
+
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _hostname(value: str) -> str:
+    """'example.com:8765' -> 'example.com'; '[::1]:8765' -> '[::1]'."""
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        return value[: value.find("]") + 1] if "]" in value else value
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
+def origin_allowed(origin: str, extra: set) -> bool:
+    if origin in extra:
+        return True
+    from urllib.parse import urlsplit
+    try:
+        host = urlsplit(origin).hostname or ""
+    except ValueError:
+        return False
+    return host in LOOPBACK_HOSTS or f"[{host}]" in LOOPBACK_HOSTS
 
 
 def check_bind(host: str, token: str, allow_insecure: bool = False):
@@ -119,6 +142,27 @@ def create_app(engine: TTSEngine, store: VoiceStore,
             raise HTTPException(401, "Invalid or missing bearer token.")
 
     A = [Depends(auth)]
+
+    @app.middleware("http")
+    async def browser_guard(request, call_next):
+        """Block web pages from driving the API (CBX-06).
+
+        * Any request with an Origin header must come from a loopback page (or one listed
+          in CBX_ALLOWED_ORIGINS). Browsers always send Origin on cross-site POSTs, while
+          scripts, curl, the OpenAI SDK and the MCP server send none. This stops a web page
+          planting a voice with a plain HTML form (no CORS preflight needed).
+        * Without a token, the Host header must be loopback. A DNS-rebinding page arrives
+          as Host: attacker.example, so it is rejected even though the socket is local.
+        """
+        origin = request.headers.get("origin")
+        extra = {o.strip() for o in config.ALLOWED_ORIGINS.split(",") if o.strip()}
+        if origin is not None and not origin_allowed(origin, extra):
+            return JSONResponse({"detail": "Cross-origin browser requests are not allowed."},
+                                status_code=403)
+        if not config.API_TOKEN and not config.ALLOW_INSECURE and _hostname(request.headers.get("host", "")) not in LOOPBACK_HOSTS:
+            return JSONResponse({"detail": "Host not allowed. Use 127.0.0.1 or localhost, "
+                                           "or set a token for network access."}, status_code=403)
+        return await call_next(request)
 
     def find_voice(ref: str, openai: bool = False):
         if not ref:
@@ -277,8 +321,13 @@ def create_app(engine: TTSEngine, store: VoiceStore,
             resolve_kind(s["model"], s["language"])          # fail fast, not in the queue
         except EngineError as e:
             raise HTTPException(400, str(e))
-        job = jobs.submit(req.text, voice.id if voice else "", voice.path if voice else None,
-                          s, fmt, req.srt, req.seed)
+        try:
+            job = jobs.submit(req.text, voice.id if voice else "", voice.path if voice else None,
+                              s, fmt, req.srt, req.seed)
+        except QueueFull as e:
+            raise HTTPException(429, str(e), headers={"Retry-After": "30"})
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         return job.public()
 
     @app.get("/jobs", dependencies=A)

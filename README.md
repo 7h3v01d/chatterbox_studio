@@ -32,7 +32,7 @@ Something not working? Run `.venv\Scripts\python -m chatterbox_studio doctor` fo
 | Expressive / Dramatic | characters, ads, energy |
 | Other-language voice | when the voice is in a different language from the text (stops accent bleed) |
 
-**Fine-tune** gives you Emotion, Pacing, Variation, Speed, Pause length and a **Seed**. The same seed with the same settings reproduces the same take. **Save as voice default** remembers your settings for that voice, everywhere (app, CLI, API, MCP).
+**Fine-tune** gives you Emotion, Pacing, Variation, Speed, Pause length and a **Seed**. The same seed with the same settings should reproduce the same take *on the same machine with the same versions*; GPU kernels, drivers and model updates can still change the result, so treat it as "very close", not guaranteed bit-identical. **Save as voice default** remembers your settings for that voice, everywhere (app, CLI, API, MCP).
 
 **In your text:**
 - `[pause 1s]`, `[pause 500ms]` or `[pause]` add silence
@@ -47,8 +47,8 @@ Something not working? Run `.venv\Scripts\python -m chatterbox_studio doctor` fo
 | Auto | picks Standard for English, Multilingual otherwise |
 | Standard | English with the full Emotion/Pacing controls |
 | Turbo | fastest English, with reaction tags |
-| Nano | smallest English model, usable on CPU |
-| Multilingual | 23 languages (needs one of your voices) |
+| Nano | smallest English model, usable on CPU. **Not in the PyPI release (0.1.7)**; needs chatterbox installed from GitHub (`doctor` tells you) |
+| Multilingual | 23 languages. Uses V3 when your chatterbox-tts has it, V2 otherwise. Its built-in voice speaks with an English accent, so use one of your voices |
 
 **Long-form**: paste or open a `.txt`/`.md` file (articles, scripts, chapters). It narrates in the background with progress and an ETA, can be cancelled, and can write an **.srt subtitle file** timed to the audio, ready for video editors.
 
@@ -106,6 +106,8 @@ In the app: **Connect → Claude Desktop (MCP) config** copies the exact config 
 
 Tools: `status`, `list_voices`, `list_presets`, `speak` (switches to a background job automatically for long text), `speak_long` (audio + subtitles), `set_voice_defaults`, `clone_voice` (consent required). Deleting voices is deliberately **not** exposed to AI tools.
 
+Audio from MCP is saved in Chatterbox Studio's `output` folder. An AI tool can pick a file name but cannot write anywhere else, cannot overwrite an existing file, and the extension must match the audio format. To let it save into other folders, list them in `CBX_MCP_OUTPUT_DIRS` (separated by `;` on Windows).
+
 ## Settings (environment variables)
 
 | Variable | Default | |
@@ -116,21 +118,26 @@ Tools: `status`, `list_voices`, `list_presets`, `speak` (switches to a backgroun
 | `CBX_URL` | `http://HOST:PORT` | where the MCP server finds the API |
 | `CBX_MAX_CHARS` | `20000` | per `/tts` request |
 | `CBX_ALLOW_INSECURE` | – | `1` allows a network bind without a token (not recommended) |
+| `CBX_ALLOWED_ORIGINS` | – | comma-separated web origins allowed to call the API from a browser page |
+| `CBX_MCP_OUTPUT_DIRS` | – | extra folders MCP tools may save audio into |
 
 ## Safety and privacy
 
 - **Consent is required** for every voice. Only clone your own voice, or one you have explicit permission to use.
 - The API listens on **this computer only** by default. It **refuses to listen on your network without a token**.
+- **Web pages can't use it.** Browser requests from other sites are rejected (an `Origin` check), and without a token only `localhost`/`127.0.0.1` host names are accepted, which blocks DNS-rebinding tricks. Scripts, curl, the OpenAI SDK and MCP are unaffected.
+- **Bounded work.** At most 20 long-form jobs (2 million characters) can wait at once; beyond that the API answers `429 Too Many Requests`.
 - Chatterbox embeds an inaudible **PerTh watermark** in all generated audio.
 - Resemble AI marked Chatterbox as retired research in August 2026. The model is still MIT-licensed and works, but expect no upstream fixes.
 
 ## Development
 
 ```bat
-test.bat            REM or: python -m pytest -q
+test.bat            REM strict: any skipped test fails the run
+python -m pytest -q REM non-strict
 ```
 
-The suite uses a fake model, so it runs in seconds without a GPU or a model download.
+The suite uses a fake model, so it runs in seconds without a GPU or a model download. That proves the app's logic, not speech quality: see `RELEASE_CHECKLIST.md` for the real-model and Windows checks to do before tagging a release.
 
 Layout: `src/chatterbox_studio/` contains `text.py` (planning and chunking), `audio.py` (encode, trim, speed, quality, subtitles), `engine.py` (models), `voices.py`, `jobs.py`, `api.py`, `mcp_server.py`, `cli.py`, `gui.py` and `recorder.py`.
 

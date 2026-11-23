@@ -12,6 +12,8 @@ CLI and the MCP server all agree without a config file:
     CBX_URL         where the MCP server finds the API    default http://HOST:PORT
     CBX_MAX_CHARS   max characters per /tts request        default 20000
     CBX_ALLOW_INSECURE=1   allow a LAN bind without a token (not recommended)
+    CBX_ALLOWED_ORIGINS    web origins allowed to call the API from a browser
+    CBX_MCP_OUTPUT_DIRS    extra folders the MCP server may save audio into
 """
 import os
 from pathlib import Path
@@ -25,6 +27,9 @@ API_HOST = os.environ.get("CBX_HOST", "127.0.0.1")
 API_PORT = int(os.environ.get("CBX_PORT", "8765"))
 API_TOKEN = os.environ.get("CBX_TOKEN", "")
 ALLOW_INSECURE = os.environ.get("CBX_ALLOW_INSECURE", "") == "1"
+ALLOWED_ORIGINS = os.environ.get("CBX_ALLOWED_ORIGINS", "")   # comma-separated web origins
+# Extra folders (os.pathsep-separated) the MCP server may write audio into, besides output/
+MCP_OUTPUT_DIRS = os.environ.get("CBX_MCP_OUTPUT_DIRS", "")
 MAX_CHARS = int(os.environ.get("CBX_MAX_CHARS", "20000"))
 MAX_JOB_CHARS = 500_000
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024

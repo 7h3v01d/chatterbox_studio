@@ -51,6 +51,42 @@ def _clean(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def _output_roots() -> list[Path]:
+    roots = [config.OUT_DIR] + [Path(p).expanduser() for p in
+                                config.MCP_OUTPUT_DIRS.split(os.pathsep) if p.strip()]
+    return [r.resolve() for r in roots]
+
+
+def _safe_dest(save_to: str | None, fmt: str, default: str) -> Path:
+    """CBX-01: where an MCP tool may write. Relative paths land in the output folder;
+    absolute paths must resolve (after following symlinks) inside the output folder or a
+    folder listed in CBX_MCP_OUTPUT_DIRS. Existing files are never overwritten, and the
+    extension must match the audio format, so a tool call can't clobber e.g. a config file."""
+    if not save_to:
+        return config.OUT_DIR / default
+    raw = Path(save_to).expanduser()
+    if raw.suffix.lower() != f".{fmt}":
+        raise RuntimeError(f"save_to must end in .{fmt} to match the audio format.")
+    p = raw if raw.is_absolute() else config.OUT_DIR / raw
+    resolved = p.resolve()
+    roots = _output_roots()
+    if not any(resolved.is_relative_to(r) for r in roots):
+        allowed = ", ".join(str(r) for r in roots)
+        raise RuntimeError(f"Refusing to write outside the allowed folders ({allowed}). "
+                           "The user can add folders with CBX_MCP_OUTPUT_DIRS.")
+    for target in (p, resolved, resolved.with_suffix(".srt")):
+        if target.exists() or target.is_symlink():
+            raise RuntimeError(f"{target} already exists; choose a new file name.")
+    return resolved
+
+
+def _write_new(path: Path, data: bytes):
+    """Exclusive create: fails rather than following a symlink or replacing a file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "xb") as f:
+        f.write(data)
+
+
 def _play(path: str):
     import sounddevice as sd
     import soundfile as sf
@@ -93,6 +129,8 @@ def speak(text: str, voice: str = "", language: str | None = None,
            [laugh], [chuckle] and [cough] tags in the text.
     speed: 0.5-2.0. Text may include [pause 1s] markers; blank lines become paragraph pauses.
     format: wav | flac | mp3 | ogg | opus.  play: also play it out loud on this machine.
+    save_to: optional file name; it is saved in Chatterbox Studio's output folder (or a
+             folder the user allowed) and never overwrites an existing file.
     Long texts (over ~2000 characters) are handled as a background job automatically.
     """
     opts = _clean({"voice_id": voice, "language": language, "preset": preset, "model": model,
@@ -101,10 +139,9 @@ def speak(text: str, voice: str = "", language: str | None = None,
     if len(text) > 2000:
         return speak_long(text, voice, language, preset, model, speed, fmt, False, save_to,
                           play=play)
+    out = _safe_dest(save_to, fmt, f"mcp_{int(time.time() * 1000)}_{os.urandom(3).hex()}.{fmt}")
     r = _call("POST", "/tts", json={"text": text, "format": fmt, **opts})
-    out = Path(save_to) if save_to else config.OUT_DIR / f"mcp_{int(time.time() * 1000)}.{fmt}"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(r.content)
+    _write_new(out, r.content)
     if play:
         _play(str(out))
     return f"{out} ({r.headers.get('X-Audio-Seconds', '?')} s)"
@@ -118,21 +155,22 @@ def speak_long(text: str, voice: str = "", language: str | None = None,
     """Narrate long text (articles, scripts, chapters) as a background job and wait for
     it. Writes an audio file and, with subtitles=True, a matching .srt file. Returns the
     paths. Markdown is cleaned automatically."""
+    fmt = format.lower()
+    _safe_dest(save_to, fmt, "probe")                 # validate before queueing any work
     body = _clean({"text": text, "voice_id": voice, "language": language, "preset": preset,
                    "model": model, "speed": speed, "format": format.lower(), "srt": subtitles})
     job = _call("POST", "/jobs", json=body).json()
-    while job["status"] in ("queued", "running"):
+    while job["status"] not in ("done", "failed", "cancelled"):
         time.sleep(1.0)
         job = _call("GET", f"/jobs/{job['id']}", timeout=30).json()
     if job["status"] != "done":
         raise RuntimeError(f"Job {job['status']}: {job.get('error', '')}")
-    out = Path(save_to) if save_to else config.OUT_DIR / f"mcp_{job['id']}.{job['fmt']}"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(_call("GET", f"/jobs/{job['id']}/audio").content)
+    out = _safe_dest(save_to, fmt, f"mcp_{job['id']}.{fmt}")
+    _write_new(out, _call("GET", f"/jobs/{job['id']}/audio").content)
     result = [f"audio: {out} ({job['seconds']} s)"]
     if subtitles:
         sp = out.with_suffix(".srt")
-        sp.write_text(_call("GET", f"/jobs/{job['id']}/srt").text, encoding="utf-8")
+        _write_new(sp, _call("GET", f"/jobs/{job['id']}/srt").text.encode("utf-8"))
         result.append(f"subtitles: {sp}")
     if play:
         _play(str(out))

@@ -16,7 +16,8 @@ from conftest import SR, speech_like
 @pytest.fixture
 def client(engine, store, tmp_path):
     from chatterbox_studio.jobs import JobManager
-    return TestClient(create_app(engine, store, JobManager(engine, tmp_path / "jobs")))
+    return TestClient(create_app(engine, store, JobManager(engine, tmp_path / "jobs")),
+                      base_url="http://127.0.0.1:8765")
 
 
 def _wav():
@@ -83,7 +84,7 @@ def test_jobs_end_to_end(client):
     j = client.post("/jobs", json={"text": "Long one. " * 50, "format": "mp3", "srt": True}).json()
     for _ in range(200):
         j = client.get(f"/jobs/{j['id']}").json()
-        if j["status"] not in ("queued", "running"):
+        if j["status"] in ("done", "failed", "cancelled"):
             break
         time.sleep(0.02)
     assert j["status"] == "done", j

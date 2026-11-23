@@ -67,6 +67,44 @@ def resolve_kind(model: str, language: str) -> str:
     return model
 
 
+NANO_MISSING = ("The Nano model isn't in the chatterbox-tts release on PyPI (0.1.7). "
+                "Install the GitHub version to use it:  "
+                "pip install -U git+https://github.com/resemble-ai/chatterbox  "
+                "— or pick Turbo, which is nearly as fast.")
+
+
+def _takes(fn, name: str) -> bool:
+    try:
+        return name in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def capabilities() -> dict:
+    """What the installed chatterbox-tts can actually do (checked by signature, not by
+    trial-and-error loading)."""
+    caps = {"standard": False, "turbo": False, "nano": False, "multilingual": False,
+            "multilingual_v3": False}
+    try:
+        import chatterbox.tts  # noqa: F401
+        caps["standard"] = True
+    except Exception:
+        pass
+    try:
+        from chatterbox.tts_turbo import ChatterboxTurboTTS
+        caps["turbo"] = True
+        caps["nano"] = _takes(ChatterboxTurboTTS.from_pretrained, "nano")
+    except Exception:
+        pass
+    try:
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+        caps["multilingual"] = True
+        caps["multilingual_v3"] = _takes(ChatterboxMultilingualTTS.from_pretrained, "t3_model")
+    except Exception:
+        pass
+    return caps
+
+
 def default_factory(kind: str, device: str):
     """Load a real Chatterbox model. Imported lazily so tests and the CLI's doctor
     command work without the package installed."""
@@ -77,18 +115,16 @@ def default_factory(kind: str, device: str):
         if kind in ("turbo", "nano"):
             from chatterbox.tts_turbo import ChatterboxTurboTTS
             if kind == "nano":
+                if not _takes(ChatterboxTurboTTS.from_pretrained, "nano"):
+                    raise EngineError(NANO_MISSING)
                 return ChatterboxTurboTTS.from_pretrained(device=device, nano=True)
             return ChatterboxTurboTTS.from_pretrained(device=device)
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-        try:
+        if _takes(ChatterboxMultilingualTTS.from_pretrained, "t3_model"):
             return ChatterboxMultilingualTTS.from_pretrained(device=device, t3_model="v3")
-        except TypeError:   # older release without the V3 checkpoint switch
-            return ChatterboxMultilingualTTS.from_pretrained(device=device)
+        return ChatterboxMultilingualTTS.from_pretrained(device=device)   # V2 on PyPI 0.1.7
     except ImportError as e:
         raise EngineError(f"The {kind} model isn't in your installed chatterbox-tts. "
-                          "Upgrade it:  pip install -U chatterbox-tts") from e
-    except TypeError as e:
-        raise EngineError(f"Your chatterbox-tts doesn't support the {kind} model ({e}). "
                           "Upgrade it:  pip install -U chatterbox-tts") from e
 
 
@@ -187,6 +223,12 @@ class TTSEngine:
         self._default_conds = copy.deepcopy(conds) if conds is not None else None
 
     def _apply_voice(self, voice_path: Optional[str], exaggeration: float):
+        # The cache key deliberately omits exaggeration (review finding CBX-03, checked
+        # against chatterbox-tts 0.1.7): Standard and Multilingual generate() rebuild the
+        # emotion conditioning whenever the exaggeration they are passed differs, and Turbo
+        # ignores exaggeration entirely. Re-preparing would only re-run the speaker encoder.
+        # This relies on render() passing exaggeration to generate() on every call, which
+        # test_exaggeration_reaches_every_generate_call pins down.
         key = (self._kind, voice_path)
         if key == self._voice_loaded:
             return
@@ -239,6 +281,9 @@ class TTSEngine:
                         continue
                     kw = {"exaggeration": s["exaggeration"], "cfg_weight": s["cfg_weight"],
                           "temperature": s["temperature"]}
+                    if kind in ("turbo", "nano"):
+                        # Turbo ignores these and logs a warning per call if they're > 0
+                        kw.update(exaggeration=0.0, cfg_weight=0.0)
                     if kind == "multilingual":
                         kw["language_id"] = language
                     wav = _to_numpy(gen(seg.text, **_accepted(gen, kw)))

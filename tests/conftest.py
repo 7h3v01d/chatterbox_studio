@@ -48,10 +48,28 @@ class FakeModel:
 
 
 class TurboFake(FakeModel):
-    """Turbo-like: generate() does not accept cfg_weight/exaggeration."""
+    """Mirrors chatterbox-tts 0.1.7 ChatterboxTurboTTS.generate(): accepts exaggeration and
+    cfg_weight (defaults 0.0) but ignores them, warning when they are > 0. No language_id."""
+    warnings = 0
 
-    def generate(self, text, audio_prompt_path=None, temperature=0.8):
-        return super().generate(text, temperature=temperature)
+    def generate(self, text, repetition_penalty=1.2, min_p=0.0, top_p=0.95,
+                 audio_prompt_path=None, exaggeration=0.0, cfg_weight=0.0,
+                 temperature=0.8, top_k=1000, norm_loudness=True):
+        if cfg_weight > 0.0 or exaggeration > 0.0 or min_p > 0.0:
+            TurboFake.warnings += 1
+        return super().generate(text, exaggeration=exaggeration, cfg_weight=cfg_weight,
+                                temperature=temperature)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """CBX_STRICT=1 (set by test.bat): a skipped test fails the run, so a machine missing
+    PyQt6 or the MCP SDK can't report green while silently skipping those suites."""
+    if os.environ.get("CBX_STRICT") == "1":
+        tr = session.config.pluginmanager.get_plugin("terminalreporter")
+        if tr and tr.stats.get("skipped"):
+            tr.write_line(f"CBX_STRICT: {len(tr.stats['skipped'])} skipped — install all "
+                          "dependencies (pip install -e .[dev]) before releasing.", red=True)
+            session.exitstatus = 1
 
 
 @pytest.fixture
